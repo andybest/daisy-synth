@@ -1,9 +1,9 @@
 use super::SampleType;
 
-trait MonoGenerator {
-    fn tick(frames: &[SampleType]);
+pub trait MonoGenerator {
+    fn tick(&mut self) -> SampleType;
 }
 
-trait StereoGenerator {
-    fn tick(frames: &[(SampleType, SampleType)]);
+pub trait StereoGenerator {
+    fn tick(&mut self) -> (SampleType, SampleType);
 }

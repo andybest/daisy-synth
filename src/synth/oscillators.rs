@@ -1,9 +1,14 @@
 use super::{SampleType, PI, TWO_PI};
+use super::traits::{MonoGenerator};
 
 use micromath::F32Ext;
 
+pub struct DSPSettings {
+    sample_rate: SampleType
+}
+
 #[derive(PartialEq, Clone, Copy)]
-enum OscillatorMode {
+pub enum OscillatorMode {
     Sine,
     Saw,
     Square,
@@ -11,6 +16,7 @@ enum OscillatorMode {
 }
 
 pub struct Oscillator {
+    sample_rate: SampleType,
     mode: OscillatorMode,
     frequency: SampleType,
     phase: SampleType,
@@ -19,14 +25,32 @@ pub struct Oscillator {
 }
 
 impl Oscillator {
-    pub fn new() -> Oscillator {
-        Oscillator {
-            mode: OscillatorMode::Sine,
-            frequency: 440.0,
+    pub fn new(mode: OscillatorMode, frequency: SampleType, sample_rate: SampleType) -> Oscillator {
+        let mut osc = Oscillator {
+            sample_rate,
+            mode,
+            frequency,
             phase: 0.0,
             phase_increment: 0.0,
             last_output: 0.0,
-        }
+        };
+        osc.update_phase_increment();
+
+        osc
+    }
+
+    fn update_phase_increment(&mut self) {
+        self.phase_increment = self.frequency * 2.0 * PI / self.sample_rate;
+    }
+
+    pub fn set_frequency(&mut self, frequency: SampleType) {
+        self.frequency = frequency;
+        self.update_phase_increment();
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: SampleType) {
+        self.sample_rate = sample_rate;
+        self.update_phase_increment();
     }
 
     fn poly_blep(&self, t: SampleType) -> SampleType {
@@ -60,10 +84,10 @@ impl Oscillator {
         }
     }
 
-    fn tick_naive(&mut self) -> SampleType {
+    pub fn tick_naive(&mut self) -> SampleType {
         let x = self.naive_waveform(self.mode);
+        
         self.phase += self.phase_increment;
-
         while self.phase >= TWO_PI {
             self.phase -= TWO_PI
         }
@@ -71,7 +95,7 @@ impl Oscillator {
         x
     }
 
-    fn tick_poly_blep(&mut self) -> SampleType {
+    pub fn tick_poly_blep(&mut self) -> SampleType {
         let t = self.phase / TWO_PI;
 
         let samp: SampleType = match self.mode {
@@ -91,10 +115,17 @@ impl Oscillator {
             }
         };
 
+        self.phase += self.phase_increment;
         while self.phase >= TWO_PI {
             self.phase -= TWO_PI
         }
 
         samp
+    }
+}
+
+impl MonoGenerator for Oscillator {
+    fn tick(&mut self) -> SampleType {
+        self.tick_poly_blep()
     }
 }
