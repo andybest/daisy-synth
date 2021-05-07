@@ -3,7 +3,6 @@
 
 use panic_semihosting as _;
 use cortex_m_rt::entry;
-use synth::traits::MonoGenerator;
 
 use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
@@ -18,10 +17,9 @@ use daisy::audio;
 use daisy::pac;
 use pac::interrupt;
 
-use crate::synth::oscillators::{Oscillator, OscillatorMode};
 
-mod synth;
-
+use libdsp::traits::MonoGenerator;
+use libdsp::oscillators::{ Oscillator, OscillatorMode};
 
 // - static global state ------------------------------------------------------
 

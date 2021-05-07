@@ -1,0 +1,12 @@
+[package]
+name = "dsptest"
+version = "0.1.0"
+authors = ["Andy Best <andybest.net@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+libdsp = { path = "../libdsp" }
+iced = { git = "https://github.com/hecrj/iced.git", features = ["glow"] }
+iced_native = { git = "https://github.com/hecrj/iced.git" }
+cpal = "0.13.1"
+rand = "0.8.2"

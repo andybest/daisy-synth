@@ -1,0 +1,12 @@
+[package]
+name = "libdsp"
+version = "0.1.0"
+authors = ["Andy Best <andybest.net@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+micromath = "1.1.1"
+
+[features]
+default = ["sample_f32"]
+sample_f32 = []

@@ -3,9 +3,6 @@ use super::traits::{MonoGenerator};
 
 use micromath::F32Ext;
 
-pub struct DSPSettings {
-    sample_rate: SampleType
-}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum OscillatorMode {
