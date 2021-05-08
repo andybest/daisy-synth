@@ -1,5 +1,5 @@
 #[derive(Debug)]
 pub enum SynthMessage {
-    Note,
-    Foo
+    NoteOn(u8),
+    NoteOff(u8)
 }
