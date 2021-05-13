@@ -79,7 +79,7 @@ impl Application for SynthUI {
         };
 
         if let Some(msg) = synth_message {
-            self.tx.send(msg);
+            self.tx.send(msg).expect("Unable to send message");
         }
 
         Command::none()

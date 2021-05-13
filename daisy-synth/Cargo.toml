@@ -6,9 +6,21 @@ version = "0.0.1"
 default-target = "thumbv7em-none-eabihf"
 
 [dependencies]
-panic-halt = "0.2.0"
-panic-semihosting = { version = "0.5.6" }
-cortex-m = "0.6.4"
-cortex-m-rt = { version = "0.6.13", features = ["device"] }
-daisy_bsp = { version = "0.4.1", features = ["seed", "alloc"]  }
+cortex-m = "0.6.2"
+cortex-m-rtic = "0.5.6"
+log = "0.4.11"
+stm32h7xx-hal = { version = "0.9.0", features = ["stm32h750v","rt","fmc"] }
+libdaisy = { version = "0.1.0",  features = ["log-rtt"], git = "https://github.com/mtthw-meyer/libdaisy-rust.git" }
 libdsp = { path = "../libdsp", features = ["sample_f32"] }
+
+[profile.dev]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size in flash
+incremental = false
+opt-level = "s" # optimize for binary size
+
+[profile.release]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size in flash
+lto = true # better optimizations
+opt-level = "s" # optimize for binary size
