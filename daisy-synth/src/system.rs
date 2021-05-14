@@ -21,7 +21,7 @@ use stm32h7xx_hal::{
 
 use display_interface_spi::SPIInterface;
 use ili9341::{DisplaySize240x320, Ili9341};
-use libdaisy::audio::Audio;
+use libdaisy::{audio::Audio, prelude::OutputPin};
 use libdaisy::*;
 use libdaisy::{
     prelude::{Output, PushPull},
@@ -255,6 +255,10 @@ impl System {
         let cs = gpiob.pb8.into_push_pull_output();
         let reset = gpioa.pa2.into_push_pull_output();
         let interface = SPIInterface::new(spi, dc, cs);
+        let mut ts_cs = gpiob.pb9.into_push_pull_output();
+
+        // Disable touchscreen CS
+        ts_cs.set_high().expect("Could not disable touchscreen");
 
         let ili9341 = Ili9341::new(
             interface,
@@ -280,8 +284,8 @@ impl System {
             // Some(gpiog.pg11),
             // Some(gpiob.pb4),
             // Some(gpiob.pb5),
-            //Some(gpiob.pb8),
-            Some(gpiob.pb9),
+            // Some(gpiob.pb8),
+            // Some(gpiob.pb9),
             Some(gpiob.pb6),
             Some(gpiob.pb7),
             Some(gpioc.pc0),
