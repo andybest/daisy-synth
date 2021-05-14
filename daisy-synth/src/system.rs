@@ -1,0 +1,349 @@
+//! Contains setup for Daisy board hardware.
+#![allow(dead_code)]
+// #![allow(unused_variables)]
+
+use log::info;
+
+use stm32h7xx_hal::{
+    adc,
+    delay::Delay,
+    device::SPI1,
+    gpio,
+    prelude::*,
+    rcc,
+    spi::{self, Enabled, Spi},
+    stm32,
+    stm32::TIM2,
+    time::{Hertz, MegaHertz},
+    timer::Event,
+    timer::Timer,
+};
+
+use display_interface_spi::SPIInterface;
+use ili9341::{DisplaySize240x320, Ili9341};
+use libdaisy::audio::Audio;
+use libdaisy::*;
+use libdaisy::{
+    prelude::{Output, PushPull},
+    sdram,
+};
+
+const HSE_CLOCK_MHZ: MegaHertz = MegaHertz(16);
+const HCLK_MHZ: MegaHertz = MegaHertz(200);
+const HCLK2_MHZ: MegaHertz = MegaHertz(200);
+
+// PCLKx
+const PCLK_HZ: Hertz = Hertz(CLOCK_RATE_HZ.0 / 4);
+// 49_152_344
+// PLL1
+const PLL1_P_HZ: Hertz = CLOCK_RATE_HZ;
+const PLL1_Q_HZ: Hertz = Hertz(CLOCK_RATE_HZ.0 / 18);
+const PLL1_R_HZ: Hertz = Hertz(CLOCK_RATE_HZ.0 / 32);
+// PLL2
+const PLL2_P_HZ: Hertz = Hertz(4_000_000);
+const PLL2_Q_HZ: Hertz = Hertz(PLL2_P_HZ.0 / 2); // No divder given, what's the default?
+const PLL2_R_HZ: Hertz = Hertz(PLL2_P_HZ.0 / 4); // No divder given, what's the default?
+                                                 // PLL3
+                                                 // 48Khz * 256 = 12_288_000
+const PLL3_P_HZ: Hertz = Hertz(AUDIO_SAMPLE_HZ.0 * 257);
+const PLL3_Q_HZ: Hertz = Hertz(PLL3_P_HZ.0 / 4);
+const PLL3_R_HZ: Hertz = Hertz(PLL3_P_HZ.0 / 16);
+
+pub type LCD = Ili9341<
+    SPIInterface<
+        Spi<SPI1, Enabled, u8>,
+        gpio::gpioa::PA5<Output<PushPull>>,
+        gpio::gpiob::PB8<Output<PushPull>>,
+    >,
+    gpio::gpioa::PA2<Output<PushPull>>,
+>;
+
+pub struct System {
+    pub gpio: crate::gpio::GPIO,
+    pub audio: audio::Audio,
+    pub exti: stm32::EXTI,
+    pub syscfg: stm32::SYSCFG,
+    pub adc1: adc::Adc<stm32::ADC1, adc::Disabled>,
+    pub adc2: adc::Adc<stm32::ADC2, adc::Disabled>,
+    pub timer2: Timer<TIM2>,
+    pub sdram: &'static mut [f32],
+    pub ili9341: LCD,
+}
+
+impl System {
+    /// Initialize clocks
+    pub fn init_clocks(pwr: stm32::PWR, rcc: stm32::RCC, syscfg: &stm32::SYSCFG) -> rcc::Ccdr {
+        // Power
+        let pwr = pwr.constrain();
+        let vos = pwr.vos0(syscfg).freeze();
+        rcc.constrain()
+            .use_hse(HSE_CLOCK_MHZ)
+            .sys_ck(CLOCK_RATE_HZ)
+            .pclk1(PCLK_HZ) // DMA clock
+            // PLL1
+            .pll1_strategy(rcc::PllConfigStrategy::Iterative)
+            .pll1_p_ck(PLL1_P_HZ)
+            .pll1_q_ck(PLL1_Q_HZ)
+            .pll1_r_ck(PLL1_R_HZ)
+            // PLL2
+            .pll2_p_ck(PLL2_P_HZ) // Default adc_ker_ck_input
+            // .pll2_q_ck(PLL2_Q_HZ)
+            // .pll2_r_ck(PLL2_R_HZ)
+            // PLL3
+            .pll3_strategy(rcc::PllConfigStrategy::Iterative)
+            .pll3_p_ck(PLL3_P_HZ)
+            .pll3_q_ck(PLL3_Q_HZ)
+            .pll3_r_ck(PLL3_R_HZ)
+            .freeze(vos, &syscfg)
+    }
+
+    /// Setup cache
+    pub fn init_cache(
+        scb: &mut cortex_m::peripheral::SCB,
+        cpuid: &mut cortex_m::peripheral::CPUID,
+    ) {
+        scb.enable_icache();
+        scb.enable_dcache(cpuid);
+    }
+
+    /// Enable debug
+    pub fn init_debug(dcb: &mut cortex_m::peripheral::DCB, dwt: &mut cortex_m::peripheral::DWT) {
+        dcb.enable_trace();
+        cortex_m::peripheral::DWT::unlock();
+        dwt.enable_cycle_counter();
+    }
+
+    /// Batteries included initialization
+    pub fn init(mut core: rtic::export::Peripherals, device: stm32::Peripherals) -> System {
+        info!("Starting system init");
+        let mut ccdr = Self::init_clocks(device.PWR, device.RCC, &device.SYSCFG);
+
+        // log_clocks(&ccdr);
+        let mut delay = Delay::new(core.SYST, ccdr.clocks);
+        // Setup ADCs
+        let (adc1, adc2) = adc::adc12(
+            device.ADC1,
+            device.ADC2,
+            &mut delay,
+            ccdr.peripheral.ADC12,
+            &ccdr.clocks,
+        );
+
+        Self::init_debug(&mut core.DCB, &mut core.DWT);
+
+        // Timers
+        let mut timer2 = device
+            .TIM2
+            .timer(100.ms(), ccdr.peripheral.TIM2, &mut ccdr.clocks);
+        timer2.listen(Event::TimeOut);
+
+        // let mut timer3 = device
+        //     .TIM3
+        //     .timer(1.ms(), ccdr.peripheral.TIM3, &mut ccdr.clocks);
+        // timer3.listen(Event::TimeOut);
+
+        info!("Setting up GPIOs...");
+        let gpioa = device.GPIOA.split(ccdr.peripheral.GPIOA);
+        let gpiob = device.GPIOB.split(ccdr.peripheral.GPIOB);
+        let gpioc = device.GPIOC.split(ccdr.peripheral.GPIOC);
+        let gpiod = device.GPIOD.split(ccdr.peripheral.GPIOD);
+        let gpioe = device.GPIOE.split(ccdr.peripheral.GPIOE);
+        let gpiof = device.GPIOF.split(ccdr.peripheral.GPIOF);
+        let gpiog = device.GPIOG.split(ccdr.peripheral.GPIOG);
+        let gpioh = device.GPIOH.split(ccdr.peripheral.GPIOH);
+        let gpioi = device.GPIOI.split(ccdr.peripheral.GPIOI);
+
+        // Configure SDRAM
+        info!("Setting up SDRAM...");
+        let sdram = sdram::Sdram::new(
+            device.FMC,
+            ccdr.peripheral.FMC,
+            &ccdr.clocks,
+            &mut delay,
+            &mut core.SCB,
+            &mut core.MPU,
+            gpiod.pd0,
+            gpiod.pd1,
+            gpiod.pd8,
+            gpiod.pd9,
+            gpiod.pd10,
+            gpiod.pd14,
+            gpiod.pd15,
+            gpioe.pe0,
+            gpioe.pe1,
+            gpioe.pe7,
+            gpioe.pe8,
+            gpioe.pe9,
+            gpioe.pe10,
+            gpioe.pe11,
+            gpioe.pe12,
+            gpioe.pe13,
+            gpioe.pe14,
+            gpioe.pe15,
+            gpiof.pf0,
+            gpiof.pf1,
+            gpiof.pf2,
+            gpiof.pf3,
+            gpiof.pf4,
+            gpiof.pf5,
+            gpiof.pf11,
+            gpiof.pf12,
+            gpiof.pf13,
+            gpiof.pf14,
+            gpiof.pf15,
+            gpiog.pg0,
+            gpiog.pg1,
+            gpiog.pg2,
+            gpiog.pg4,
+            gpiog.pg5,
+            gpiog.pg8,
+            gpiog.pg15,
+            gpioh.ph2,
+            gpioh.ph3,
+            gpioh.ph5,
+            gpioh.ph8,
+            gpioh.ph9,
+            gpioh.ph10,
+            gpioh.ph11,
+            gpioh.ph12,
+            gpioh.ph13,
+            gpioh.ph14,
+            gpioh.ph15,
+            gpioi.pi0,
+            gpioi.pi1,
+            gpioi.pi2,
+            gpioi.pi3,
+            gpioi.pi4,
+            gpioi.pi5,
+            gpioi.pi6,
+            gpioi.pi7,
+            gpioi.pi9,
+            gpioi.pi10,
+        )
+        .into();
+
+        info!("Setup up Audio...");
+        let audio = Audio::new(
+            device.DMA1,
+            ccdr.peripheral.DMA1,
+            device.SAI1,
+            ccdr.peripheral.SAI1,
+            gpioe.pe2,
+            gpioe.pe3,
+            gpioe.pe4,
+            gpioe.pe5,
+            gpioe.pe6,
+            &ccdr.clocks,
+            &mut core.MPU,
+            &mut core.SCB,
+        );
+
+        // Setup SPI1
+        let sclk = gpiog.pg11.into_alternate_af5();
+        let miso = gpiob.pb4.into_alternate_af5();
+        let mosi = gpiob.pb5.into_alternate_af5();
+
+        let mut spi: Spi<_, _, u8> = device.SPI1.spi(
+            (sclk, miso, mosi),
+            spi::MODE_0,
+            3.mhz(),
+            ccdr.peripheral.SPI1,
+            &ccdr.clocks,
+        );
+
+        let dc = gpioa.pa5.into_push_pull_output();
+        let cs = gpiob.pb8.into_push_pull_output();
+        let reset = gpioa.pa2.into_push_pull_output();
+        let interface = SPIInterface::new(spi, dc, cs);
+
+        let ili9341 = Ili9341::new(
+            interface,
+            reset,
+            &mut delay,
+            ili9341::Orientation::Landscape,
+            DisplaySize240x320,
+        )
+        .expect("Could not initialize display controller");
+
+        // Setup GPIOs
+        let gpio = crate::gpio::GPIO::init(
+            gpioc.pc7,
+            gpiob.pb11,
+            Some(gpiob.pb12),
+            Some(gpioc.pc11),
+            Some(gpioc.pc10),
+            Some(gpioc.pc9),
+            Some(gpioc.pc8),
+            Some(gpiod.pd2),
+            Some(gpioc.pc12),
+            Some(gpiog.pg10),
+            // Some(gpiog.pg11),
+            // Some(gpiob.pb4),
+            // Some(gpiob.pb5),
+            //Some(gpiob.pb8),
+            Some(gpiob.pb9),
+            Some(gpiob.pb6),
+            Some(gpiob.pb7),
+            Some(gpioc.pc0),
+            Some(gpioa.pa3),
+            Some(gpiob.pb1),
+            Some(gpioa.pa7),
+            Some(gpioa.pa6),
+            Some(gpioc.pc1),
+            Some(gpioc.pc4),
+            //Some(gpioa.pa5),
+            Some(gpioa.pa4),
+            Some(gpioa.pa1),
+            Some(gpioa.pa0),
+            Some(gpiod.pd11),
+            Some(gpiog.pg9),
+            //Some(gpioa.pa2),
+            Some(gpiob.pb14),
+            Some(gpiob.pb15),
+        );
+
+        // Setup cache
+        Self::init_cache(&mut core.SCB, &mut core.CPUID);
+
+        info!("System init done!");
+
+        System {
+            gpio,
+            audio,
+            exti: device.EXTI,
+            syscfg: device.SYSCFG,
+            adc1,
+            adc2,
+            timer2,
+            sdram,
+            ili9341,
+        }
+    }
+}
+
+fn log_clocks(ccdr: &stm32h7xx_hal::rcc::Ccdr) {
+    info!("Core {}", ccdr.clocks.c_ck());
+    info!("hclk {}", ccdr.clocks.hclk());
+    info!("pclk1 {}", ccdr.clocks.pclk1());
+    info!("pclk2 {}", ccdr.clocks.pclk2());
+    info!("pclk3 {}", ccdr.clocks.pclk2());
+    info!("pclk4 {}", ccdr.clocks.pclk4());
+    info!(
+        "PLL1\nP: {:?}\nQ: {:?}\nR: {:?}",
+        ccdr.clocks.pll1_p_ck(),
+        ccdr.clocks.pll1_q_ck(),
+        ccdr.clocks.pll1_r_ck()
+    );
+    info!(
+        "PLL2\nP: {:?}\nQ: {:?}\nR: {:?}",
+        ccdr.clocks.pll2_p_ck(),
+        ccdr.clocks.pll2_q_ck(),
+        ccdr.clocks.pll2_r_ck()
+    );
+    info!(
+        "PLL3\nP: {:?}\nQ: {:?}\nR: {:?}",
+        ccdr.clocks.pll3_p_ck(),
+        ccdr.clocks.pll3_q_ck(),
+        ccdr.clocks.pll3_r_ck()
+    );
+}

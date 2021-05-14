@@ -12,6 +12,8 @@ log = "0.4.11"
 stm32h7xx-hal = { version = "0.9.0", features = ["stm32h750v","rt","fmc"] }
 libdaisy = { version = "0.1.0",  features = ["log-rtt"], git = "https://github.com/mtthw-meyer/libdaisy-rust.git" }
 libdsp = { path = "../libdsp", features = ["sample_f32"] }
+ili9341 = { git = "https://github.com/yuri91/ili9341-rs.git" }
+display-interface-spi = "0.4"
 
 [profile.dev]
 codegen-units = 1 # better optimizations
